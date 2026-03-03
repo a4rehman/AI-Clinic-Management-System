@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+
+<head>
+    <meta charset="UTF-8">
+    <title>لوحة تحكم العيادة الذكية</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
+
+        body {
+            font-family: 'Cairo', sans-serif;
+            background: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .header {
+            background: #004d40;
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            flex: 1;
+        }
+
+        #qrcode img {
+            width: 250px;
+            margin: 0 auto;
+            display: block;
+        }
+
+        .activity-log {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        .msg {
+            margin-bottom: 15px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+
+        .patient {
+            font-weight: bold;
+            color: #00796b;
+        }
+
+        .bot {
+            color: #555;
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>نظام إدارة عيادة الذكاء الاصطناعي 🏥</h1>
+        <p>مساعدك الذكي لإدارة المواعيد عبر واتساب</p>
+        <a href="/logout" style="color: #ffcdd2; text-decoration: none; font-size: 0.9em;">🚪 تسجيل الخروج</a>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <h2>الاتصال بالنظام</h2>
+            <div id="qrcode">
+                <p>جاري تحميل رمز QR...</p>
+            </div>
+            <p id="status" style="text-align: center; font-weight: bold;">انتظار الاتصال...</p>
+        </div>
+
+        <div class="card">
+            <h2>آخر النشاطات</h2>
+            <div id="activity" class="activity-log">
+                <p>لا توجد رسائل حالياً...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        socket.on('qr', (url) => {
+            document.getElementById('qrcode').innerHTML = '<img src="' + url + '" />';
+            document.getElementById('status').innerText = 'يرجى مسح الرمز ضوئياً';
+        });
+        socket.on('ready', () => {
+            document.getElementById('qrcode').innerHTML = '<h1 style="color: green; font-size: 5em;">✓</h1>';
+            document.getElementById('status').innerText = 'النظام متصل الآن ✅';
+        });
+        socket.on('activity', (data) => {
+            const log = document.getElementById('activity');
+            const div = document.createElement('div');
+            div.className = 'msg';
+            div.innerHTML = `<span class="patient">المريض:</span> ${data.body}<br><span class="bot">الرد الآلي:</span> ${data.reply}`;
+            log.prepend(div);
+        });
+    </script>
+</body>
+
+</html>
