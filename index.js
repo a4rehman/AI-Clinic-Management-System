@@ -57,8 +57,17 @@ client.on('ready', () => {
     console.log('Clinic Bot is LIVE!');
 });
 
+const startTime = Math.floor(Date.now() / 1000);
+
 client.on('message', async (msg) => {
+    // 1. Ignore if it's a group message
     if (msg.from.includes('@g.us')) return;
+
+    // 2. Ignore messages that were received before the bot started
+    if (msg.timestamp < startTime) {
+        console.log(`[Ignoring Old Message] From: ${msg.from}`);
+        return;
+    }
 
     console.log(`[New Message] From: ${msg.from}, Body: ${msg.body}`);
 
