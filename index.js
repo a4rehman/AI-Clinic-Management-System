@@ -51,16 +51,47 @@ const client = new Client({
     }
 });
 
+let latestQR = null;
+let isClientReady = false;
+
 client.on('qr', (qr) => {
     qrcode.toDataURL(qr, (err, url) => {
+        latestQR = url;
         io.emit('qr', url);
         console.log('Arabic Bot QR Generated');
     });
 });
 
 client.on('ready', () => {
+    isClientReady = true;
+    latestQR = null;
     io.emit('ready');
     console.log('Clinic Bot is LIVE!');
+});
+
+// Socket.IO connection handler for pairing code and state sync
+io.on('connection', (socket) => {
+    // Send current state to newly connected clients
+    if (isClientReady) {
+        socket.emit('ready');
+    } else if (latestQR) {
+        socket.emit('qr', latestQR);
+    }
+
+    // Handle pairing code request from dashboard
+    socket.on('request_pairing_code', async (phoneNumber) => {
+        try {
+            // Remove any +, spaces, dashes from the number
+            const cleanNumber = phoneNumber.replace(/[\s\-\+]/g, '');
+            console.log(`[Pairing Code] Requesting for number: ${cleanNumber}`);
+            const code = await client.requestPairingCode(cleanNumber);
+            console.log(`[Pairing Code] Code generated: ${code}`);
+            socket.emit('pairing_code', code);
+        } catch (error) {
+            console.error('[Pairing Code Error]', error.message);
+            socket.emit('pairing_error', error.message);
+        }
+    });
 });
 
 const startTime = Math.floor(Date.now() / 1000);
