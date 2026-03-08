@@ -52,7 +52,13 @@ let currentClient = null;
 
 function createClient() {
     const clientOptions = {
-        authStrategy: new LocalAuth(),
+        authStrategy: new LocalAuth({
+            clientId: "arabic-clinic-bot"
+        }),
+        webVersionCache: {
+            type: 'remote',
+            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+        },
         puppeteer: {
             headless: true,
             args: [
@@ -126,8 +132,8 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // Small delay to ensure browser is fully settled after QR generation
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            // Longer delay to ensure everything is ready
+            await new Promise(resolve => setTimeout(resolve, 8000));
 
             let code = null;
             let lastError = null;
@@ -140,8 +146,15 @@ io.on('connection', (socket) => {
                 } catch (err) {
                     lastError = err;
                     console.error(`[Pairing Code] Attempt ${attempt} failed:`, err);
-                    // If error is 't', it might need a page reload or longer wait
-                    await new Promise(resolve => setTimeout(resolve, 3000));
+
+                    // On first solid failure, try to reload the page to re-hook the scripts
+                    if (attempt === 1) {
+                        console.log('[Pairing Code] Error detected, reloading page to retry...');
+                        try { await currentClient.pupPage.reload(); } catch (re) { }
+                        await new Promise(resolve => setTimeout(resolve, 5000));
+                    } else {
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                    }
                 }
             }
 
@@ -149,7 +162,7 @@ io.on('connection', (socket) => {
                 console.log(`[Pairing Code] Code generated: ${code}`);
                 socket.emit('pairing_code', code);
             } else {
-                let errMsg = 'فشل الحصول على الرمز. يرجى المحاولة لاحقاً.';
+                let errMsg = 'فشل الحصول على الرمز. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.';
                 if (lastError) {
                     errMsg = typeof lastError === 'string' ? lastError : (lastError.message || JSON.stringify(lastError));
                 }
@@ -157,7 +170,7 @@ io.on('connection', (socket) => {
             }
         } catch (error) {
             console.error('[Pairing Code Error]', error);
-            socket.emit('pairing_error', 'حدث خطأ: ' + (error.message || 'يرجى المحاولة مرة أخرى'));
+            socket.emit('pairing_error', 'من فضلك حاول مرة أخرى بعد قليل: ' + (error.message || 'Error'));
         }
     });
 });
