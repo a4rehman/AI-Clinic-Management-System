@@ -55,10 +55,6 @@ function createClient() {
         authStrategy: new LocalAuth({
             clientId: "arabic-clinic-bot"
         }),
-        webVersionCache: {
-            type: 'remote',
-            remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
-        },
         puppeteer: {
             headless: true,
             args: [
@@ -66,11 +62,11 @@ function createClient() {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                '--disable-blink-features=AutomationControlled'
             ],
             executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable'
         },
-        // CRITICAL FIX: This option must be true for pairing codes to work
         pairWithPhoneNumber: true
     };
 
@@ -125,55 +121,61 @@ io.on('connection', (socket) => {
     socket.on('request_pairing_code', async (phoneNumber) => {
         try {
             const cleanNumber = phoneNumber.replace(/[\s\-\+]/g, '');
-            console.log(`[Pairing Code] Requesting for number: ${cleanNumber}`);
+            console.log(`[Pairing Code] Requesting code for: ${cleanNumber}`);
 
             if (!qrReceived) {
-                socket.emit('pairing_error', 'الرجاء الانتظار قليلاً حتى يظهر رمز QR أولاً، ثم حاول مرة أخرى');
+                socket.emit('pairing_error', 'الرجاء الانتظار قليلاً حتى يظهر رمز QR أولاً');
                 return;
             }
 
-            // Longer delay to ensure everything is ready
-            await new Promise(resolve => setTimeout(resolve, 8000));
-
-            let code = null;
+            let pairingCode = null;
             let lastError = null;
 
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    console.log(`[Pairing Code] Attempt ${attempt}...`);
-                    code = await currentClient.requestPairingCode(cleanNumber);
-                    if (code) break;
-                } catch (err) {
-                    lastError = err;
-                    console.error(`[Pairing Code] Attempt ${attempt} failed:`, err);
+            // Wait to ensure page is settled
+            await new Promise(resolve => setTimeout(resolve, 5000));
 
-                    // On first solid failure, try to reload the page to re-hook the scripts
-                    if (attempt === 1) {
-                        console.log('[Pairing Code] Error detected, reloading page to retry...');
-                        try { await currentClient.pupPage.reload(); } catch (re) { }
-                        await new Promise(resolve => setTimeout(resolve, 5000));
-                    } else {
-                        await new Promise(resolve => setTimeout(resolve, 3000));
-                    }
-                }
+            // Method 1: Standard
+            try {
+                console.log('[Pairing Code] Trying standard method...');
+                pairingCode = await currentClient.requestPairingCode(cleanNumber);
+            } catch (err) {
+                lastError = err;
+                console.error('[Pairing Code] Standard failed:', err);
             }
 
-            if (code) {
-                console.log(`[Pairing Code] Code generated: ${code}`);
-                socket.emit('pairing_code', code);
+            // Method 2: Manual Fallback
+            if (!pairingCode) {
+                console.log('[Pairing Code] Trying manual injection fallback...');
+                try {
+                    pairingCode = await currentClient.pupPage.evaluate(async (phone) => {
+                        try {
+                            if (window.Store && window.Store.PairingCode) {
+                                return await window.Store.PairingCode.linkWithPhoneNumber(phone, true);
+                            }
+                            return 'ERROR:Store not ready';
+                        } catch (e) { return 'ERROR:' + e.message; }
+                    }, cleanNumber);
+
+                    if (pairingCode && pairingCode.startsWith('ERROR:')) {
+                        lastError = pairingCode.replace('ERROR:', '');
+                        pairingCode = null;
+                    }
+                } catch (e) { lastError = e.message; }
+            }
+
+            if (pairingCode) {
+                console.log(`[Pairing Code] SUCCESS: ${pairingCode}`);
+                socket.emit('pairing_code', pairingCode);
             } else {
-                let errMsg = 'فشل الحصول على الرمز. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.';
-                if (lastError) {
-                    errMsg = typeof lastError === 'string' ? lastError : (lastError.message || JSON.stringify(lastError));
-                }
-                socket.emit('pairing_error', errMsg);
+                socket.emit('pairing_error', 'خطأ: ' + (lastError.message || lastError || 'فشل التوليد'));
             }
         } catch (error) {
             console.error('[Pairing Code Error]', error);
-            socket.emit('pairing_error', 'من فضلك حاول مرة أخرى بعد قليل: ' + (error.message || 'Error'));
+            socket.emit('pairing_error', 'حدث خطأ: ' + error.message);
         }
     });
 });
+
 
 const startTime = Math.floor(Date.now() / 1000);
 
