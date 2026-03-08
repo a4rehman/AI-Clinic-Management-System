@@ -62,7 +62,9 @@ function createClient() {
                 '--disable-gpu'
             ],
             executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable'
-        }
+        },
+        // CRITICAL FIX: This option must be true for pairing codes to work
+        pairWithPhoneNumber: true
     };
 
     const client = new Client(clientOptions);
