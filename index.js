@@ -37,37 +37,63 @@ const ARABIC_SYSTEM_PROMPT = `
 - يجب أن تكون ردودك قصيرة، واضحة، ومهنية للغاية باللغة العربية فقط.
 `;
 
-const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu'
-        ],
-        executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable'
-    }
-});
-
 let latestQR = null;
 let isClientReady = false;
+let qrReceived = false;
+let currentClient = null;
 
-client.on('qr', (qr) => {
-    qrcode.toDataURL(qr, (err, url) => {
-        latestQR = url;
-        io.emit('qr', url);
-        console.log('Arabic Bot QR Generated');
+function createClient(usePairingCode = false, phoneNumber = null) {
+    const clientOptions = {
+        authStrategy: new LocalAuth(),
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu'
+            ],
+            executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable'
+        }
+    };
+
+    const client = new Client(clientOptions);
+
+    client.on('qr', async (qr) => {
+        qrReceived = true;
+        qrcode.toDataURL(qr, (err, url) => {
+            latestQR = url;
+            io.emit('qr', url);
+            console.log('Arabic Bot QR Generated');
+        });
     });
-});
 
-client.on('ready', () => {
-    isClientReady = true;
-    latestQR = null;
-    io.emit('ready');
-    console.log('Clinic Bot is LIVE!');
-});
+    client.on('ready', () => {
+        isClientReady = true;
+        latestQR = null;
+        io.emit('ready');
+        console.log('Clinic Bot is LIVE!');
+    });
+
+    client.on('authenticated', () => {
+        console.log('WhatsApp Authenticated!');
+    });
+
+    client.on('auth_failure', (msg) => {
+        console.error('Authentication failed:', msg);
+        io.emit('pairing_error', 'فشل المصادقة - الرجاء المحاولة مرة أخرى');
+    });
+
+    client.on('disconnected', (reason) => {
+        console.log('Client disconnected:', reason);
+        isClientReady = false;
+        qrReceived = false;
+    });
+
+    return client;
+}
+
+currentClient = createClient();
 
 // Socket.IO connection handler for pairing code and state sync
 io.on('connection', (socket) => {
@@ -84,9 +110,52 @@ io.on('connection', (socket) => {
             // Remove any +, spaces, dashes from the number
             const cleanNumber = phoneNumber.replace(/[\s\-\+]/g, '');
             console.log(`[Pairing Code] Requesting for number: ${cleanNumber}`);
-            const code = await client.requestPairingCode(cleanNumber);
-            console.log(`[Pairing Code] Code generated: ${code}`);
-            socket.emit('pairing_code', code);
+
+            if (!qrReceived) {
+                socket.emit('pairing_error', 'النظام لم يكتمل تحميله بعد، يرجى الانتظار حتى يظهر رمز QR أولاً ثم حاول مرة أخرى');
+                return;
+            }
+
+            // Try requestPairingCode with retry
+            let code = null;
+            let lastError = null;
+
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    console.log(`[Pairing Code] Attempt ${attempt}...`);
+                    code = await currentClient.requestPairingCode(cleanNumber, true);
+                    break;
+                } catch (err) {
+                    lastError = err;
+                    console.error(`[Pairing Code] Attempt ${attempt} failed:`, err.message);
+                    if (attempt < 3) {
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                }
+            }
+
+            if (code) {
+                console.log(`[Pairing Code] Code generated: ${code}`);
+                socket.emit('pairing_code', code);
+            } else {
+                // Try alternative method via page evaluation
+                try {
+                    console.log('[Pairing Code] Trying alternative method...');
+                    code = await currentClient.pupPage.evaluate(async (phone) => {
+                        const result = await window.Store.PairingCode.linkWithPhoneNumber(phone, true);
+                        return result;
+                    }, cleanNumber);
+                    if (code) {
+                        console.log(`[Pairing Code] Alternative method succeeded: ${code}`);
+                        socket.emit('pairing_code', code);
+                    } else {
+                        throw new Error('No code returned');
+                    }
+                } catch (altError) {
+                    console.error('[Pairing Code] Alternative method also failed:', altError.message);
+                    socket.emit('pairing_error', lastError ? lastError.message : 'فشل في الحصول على رمز الاقتران. تأكد من أن الرقم صحيح وأعد المحاولة.');
+                }
+            }
         } catch (error) {
             console.error('[Pairing Code Error]', error.message);
             socket.emit('pairing_error', error.message);
@@ -96,7 +165,7 @@ io.on('connection', (socket) => {
 
 const startTime = Math.floor(Date.now() / 1000);
 
-client.on('message', async (msg) => {
+currentClient.on('message', async (msg) => {
     // 1. Ignore if it's a group message
     if (msg.from.includes('@g.us')) return;
 
@@ -182,7 +251,7 @@ app.get('/logout', (req, res) => {
     res.redirect('/');
 });
 
-client.initialize();
+currentClient.initialize();
 server.listen(3000, () => {
     console.log('Clinic System Running on port 3000');
 });
