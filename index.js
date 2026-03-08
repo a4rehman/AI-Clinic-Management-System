@@ -115,30 +115,30 @@ io.on('connection', (socket) => {
     // Handle pairing code request from dashboard
     socket.on('request_pairing_code', async (phoneNumber) => {
         try {
-            // Remove any +, spaces, dashes from the number
             const cleanNumber = phoneNumber.replace(/[\s\-\+]/g, '');
             console.log(`[Pairing Code] Requesting for number: ${cleanNumber}`);
 
             if (!qrReceived) {
-                socket.emit('pairing_error', 'النظام لم يكتمل تحميله بعد، يرجى الانتظار حتى يظهر رمز QR أولاً ثم حاول مرة أخرى');
+                socket.emit('pairing_error', 'الرجاء الانتظار حتى يظهر رمز QR أولاً، ثم حاول مرة أخرى');
                 return;
             }
 
-            // Try requestPairingCode with retry
+            // Small delay to ensure browser logic is settled
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
             let code = null;
             let lastError = null;
 
             for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                     console.log(`[Pairing Code] Attempt ${attempt}...`);
-                    code = await currentClient.requestPairingCode(cleanNumber, true);
-                    break;
+                    // Using the recommended way for most recent wwebjs versions
+                    code = await currentClient.requestPairingCode(cleanNumber);
+                    if (code) break;
                 } catch (err) {
                     lastError = err;
                     console.error(`[Pairing Code] Attempt ${attempt} failed:`, err.message);
-                    if (attempt < 3) {
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                    }
+                    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 3000));
                 }
             }
 
@@ -146,27 +146,12 @@ io.on('connection', (socket) => {
                 console.log(`[Pairing Code] Code generated: ${code}`);
                 socket.emit('pairing_code', code);
             } else {
-                // Try alternative method via page evaluation
-                try {
-                    console.log('[Pairing Code] Trying alternative method...');
-                    code = await currentClient.pupPage.evaluate(async (phone) => {
-                        const result = await window.Store.PairingCode.linkWithPhoneNumber(phone, true);
-                        return result;
-                    }, cleanNumber);
-                    if (code) {
-                        console.log(`[Pairing Code] Alternative method succeeded: ${code}`);
-                        socket.emit('pairing_code', code);
-                    } else {
-                        throw new Error('No code returned');
-                    }
-                } catch (altError) {
-                    console.error('[Pairing Code] Alternative method also failed:', altError.message);
-                    socket.emit('pairing_error', lastError ? lastError.message : 'فشل في الحصول على رمز الاقتران. تأكد من أن الرقم صحيح وأعد المحاولة.');
-                }
+                const errMsg = lastError ? lastError.message : 'فشل الحصول على الرمز';
+                socket.emit('pairing_error', errMsg);
             }
         } catch (error) {
-            console.error('[Pairing Code Error]', error.message);
-            socket.emit('pairing_error', error.message);
+            console.error('[Pairing Code Error]', error);
+            socket.emit('pairing_error', error.message || 'حدث خطأ غير متوقع');
         }
     });
 });
