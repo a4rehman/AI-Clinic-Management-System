@@ -131,43 +131,61 @@ io.on('connection', (socket) => {
             let pairingCode = null;
             let lastError = null;
 
-            // Wait to ensure page is settled
+            // Step 1: Human-like delay (Essential for Railway)
             await new Promise(resolve => setTimeout(resolve, 5000));
 
-            // Method 1: Standard
+            // Method 1: Standard Library Call
             try {
                 console.log('[Pairing Code] Trying standard method...');
                 pairingCode = await currentClient.requestPairingCode(cleanNumber);
             } catch (err) {
                 lastError = err;
-                console.error('[Pairing Code] Standard failed:', err);
+                console.error('[Pairing Code] Standard method failed:', (err.message || err));
             }
 
-            // Method 2: Manual Fallback
+            // Method 2: Robust Manual Fallback (Direct Injection with Waiter)
             if (!pairingCode) {
-                console.log('[Pairing Code] Trying manual injection fallback...');
+                console.log('[Pairing Code] Trying robust manual injection...');
                 try {
                     pairingCode = await currentClient.pupPage.evaluate(async (phone) => {
+                        const waitForStore = (timeout = 15000) => {
+                            return new Promise((resolve, reject) => {
+                                const start = Date.now();
+                                const interval = setInterval(() => {
+                                    if (window.Store && window.Store.PairingCode) {
+                                        clearInterval(interval);
+                                        resolve();
+                                    } else if (Date.now() - start > timeout) {
+                                        clearInterval(interval);
+                                        reject(new Error('WhatsApp Store timed out'));
+                                    }
+                                }, 500);
+                            });
+                        };
+
                         try {
-                            if (window.Store && window.Store.PairingCode) {
-                                return await window.Store.PairingCode.linkWithPhoneNumber(phone, true);
-                            }
-                            return 'ERROR:Store not ready';
-                        } catch (e) { return 'ERROR:' + e.message; }
+                            await waitForStore();
+                            return await window.Store.PairingCode.linkWithPhoneNumber(phone, true);
+                        } catch (e) {
+                            return 'ERROR:' + e.message;
+                        }
                     }, cleanNumber);
 
                     if (pairingCode && pairingCode.startsWith('ERROR:')) {
                         lastError = pairingCode.replace('ERROR:', '');
                         pairingCode = null;
                     }
-                } catch (e) { lastError = e.message; }
+                } catch (e) {
+                    lastError = e.message;
+                }
             }
 
             if (pairingCode) {
                 console.log(`[Pairing Code] SUCCESS: ${pairingCode}`);
                 socket.emit('pairing_code', pairingCode);
             } else {
-                socket.emit('pairing_error', 'خطأ: ' + (lastError.message || lastError || 'فشل التوليد'));
+                console.error('[Pairing Code] Total failure.');
+                socket.emit('pairing_error', 'خطأ: ' + (lastError || 'يرجى المحاولة مرة أخرى'));
             }
         } catch (error) {
             console.error('[Pairing Code Error]', error);
