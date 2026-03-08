@@ -22,19 +22,27 @@ app.use(session({
 
 const ACCESS_CODE = process.env.ACCESS_CODE || "123456";
 
-const ARABIC_SYSTEM_PROMPT = `
-أنت مساعد آلي محترف لعيادة طبية. مهمتك الوحيدة هي إدارة مواعيد المرضى.
-يجب أن تتواصل باللغة العربية الفصحى أو اللهجة البيضاء المحترمة فقط.
-المهام المطلوبة منك:
-1. الترحيب بالمرضى.
-2. حجز موعد جديد: اطلب الاسم والتاريخ المفضل.
-3. تعديل أو إلغاء موعد: اطلب تفاصيل الموعد الحالي.
-4. التأكيد: أكد الموعد النهائي بإرسال رسالة تأكيد واضحة.
+const CLINIC_SYSTEM_PROMPT = `
+Role: Professional Medical Clinic Assistant.
+Goal: Manage patient appointments and clinic inquiries only.
 
-ملاحظات هامة:
-- لا تقدم أي نصائح طبية أو تشخيصات.
-- إذا سأل المريض عن شيء خارج المواعيد، اعتذر بأدب وجهه للاتصال بالعيادة مباشرة.
-- يجب أن تكون ردودك قصيرة، واضحة، ومهنية للغاية باللغة العربية فقط.
+Language Rules:
+1. ALWAYS detect the language of the user and reply in the EXACT same language and script.
+2. If the user writes in Arabic, reply in Arabic.
+3. If the user writes in English, reply in English.
+4. If the user writes in Roman characters (like Roman Urdu/English, e.g., 'mujhe doctor se milna hai'), reply in the same Roman script.
+
+Filtering Rules (CRITICAL):
+- If the user's message is a personal greeting, small talk, or completely unrelated to clinic services (e.g., "Hi", "How are you?", "What's up?", "Who built you?"), you MUST reply with ONLY the single word: IGNORE
+- If the message is related to medical services, meeting the doctor, booking, rescheduling, or canceling an appointment, provide a professional response.
+
+Clinic Tasks:
+1. Welcome patients (only if they ask for clinic services).
+2. Book new appointments: Ask for Name and Date/Time.
+3. Reschedule or Cancel: Ask for details.
+4. Confirm: Provide a clear confirmation message.
+
+Safety: Do not provide any medical advice or diagnoses.
 `;
 
 let latestQR = null;
@@ -182,12 +190,19 @@ currentClient.on('message', async (msg) => {
         const response = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [
-                { role: "system", content: ARABIC_SYSTEM_PROMPT },
+                { role: "system", content: CLINIC_SYSTEM_PROMPT },
                 { role: "user", content: msg.body }
             ]
         });
 
-        const reply = response.choices[0].message.content;
+        const reply = response.choices[0].message.content.trim();
+
+        // Handle IGNORE keyword for personal/unrelated messages
+        if (reply.toUpperCase() === 'IGNORE') {
+            console.log(`[Filtering Message] Personal chat detected from ${msg.from}. No reply sent.`);
+            return;
+        }
+
         await msg.reply(reply);
         console.log(`[AI Reply] To: ${msg.from}, Content: ${reply}`);
 
