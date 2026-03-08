@@ -50,7 +50,7 @@ let isClientReady = false;
 let qrReceived = false;
 let currentClient = null;
 
-function createClient(usePairingCode = false, phoneNumber = null) {
+function createClient() {
     const clientOptions = {
         authStrategy: new LocalAuth(),
         puppeteer: {
@@ -115,30 +115,33 @@ io.on('connection', (socket) => {
     // Handle pairing code request from dashboard
     socket.on('request_pairing_code', async (phoneNumber) => {
         try {
-            // Remove any +, spaces, dashes from the number
             const cleanNumber = phoneNumber.replace(/[\s\-\+]/g, '');
             console.log(`[Pairing Code] Requesting for number: ${cleanNumber}`);
 
             if (!qrReceived) {
-                socket.emit('pairing_error', 'النظام لم يكتمل تحميله بعد، يرجى الانتظار حتى يظهر رمز QR أولاً ثم حاول مرة أخرى');
+                socket.emit('pairing_error', 'الرجاء الانتظار قليلاً حتى يظهر رمز QR أولاً، ثم حاول مرة أخرى');
                 return;
             }
 
-            // Try requestPairingCode with retry
+            // Ensure the page is actually ready
+            try {
+                await currentClient.pupPage.waitForSelector('canvas', { timeout: 5000 });
+            } catch (e) {
+                console.log('Waiting for canvas...');
+            }
+
             let code = null;
             let lastError = null;
 
             for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                     console.log(`[Pairing Code] Attempt ${attempt}...`);
-                    code = await currentClient.requestPairingCode(cleanNumber, true);
-                    break;
+                    code = await currentClient.requestPairingCode(cleanNumber);
+                    if (code) break;
                 } catch (err) {
                     lastError = err;
-                    console.error(`[Pairing Code] Attempt ${attempt} failed:`, err.message);
-                    if (attempt < 3) {
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                    }
+                    console.error(`[Pairing Code] Attempt ${attempt} failed:`, err);
+                    await new Promise(resolve => setTimeout(resolve, 3000));
                 }
             }
 
@@ -146,27 +149,15 @@ io.on('connection', (socket) => {
                 console.log(`[Pairing Code] Code generated: ${code}`);
                 socket.emit('pairing_code', code);
             } else {
-                // Try alternative method via page evaluation
-                try {
-                    console.log('[Pairing Code] Trying alternative method...');
-                    code = await currentClient.pupPage.evaluate(async (phone) => {
-                        const result = await window.Store.PairingCode.linkWithPhoneNumber(phone, true);
-                        return result;
-                    }, cleanNumber);
-                    if (code) {
-                        console.log(`[Pairing Code] Alternative method succeeded: ${code}`);
-                        socket.emit('pairing_code', code);
-                    } else {
-                        throw new Error('No code returned');
-                    }
-                } catch (altError) {
-                    console.error('[Pairing Code] Alternative method also failed:', altError.message);
-                    socket.emit('pairing_error', lastError ? lastError.message : 'فشل في الحصول على رمز الاقتران. تأكد من أن الرقم صحيح وأعد المحاولة.');
+                let errMsg = 'فشل الحصول على الرمز. يرجى المحاولة لاحقاً.';
+                if (lastError) {
+                    errMsg = typeof lastError === 'string' ? lastError : (lastError.message || JSON.stringify(lastError));
                 }
+                socket.emit('pairing_error', errMsg);
             }
         } catch (error) {
-            console.error('[Pairing Code Error]', error.message);
-            socket.emit('pairing_error', error.message);
+            console.error('[Pairing Code Error]', error);
+            socket.emit('pairing_error', 'حدث خطأ: ' + (error.message || 'يرجى المحاولة مرة أخرى'));
         }
     });
 });
@@ -174,19 +165,12 @@ io.on('connection', (socket) => {
 const startTime = Math.floor(Date.now() / 1000);
 
 currentClient.on('message', async (msg) => {
-    // 1. Ignore if it's a group message
     if (msg.from.includes('@g.us')) return;
-
-    // 2. Ignore messages that were received before the bot started
-    if (msg.timestamp < startTime) {
-        console.log(`[Ignoring Old Message] From: ${msg.from}`);
-        return;
-    }
+    if (msg.timestamp < startTime) return;
 
     console.log(`[New Message] From: ${msg.from}, Body: ${msg.body}`);
 
     try {
-        console.log('Sending request to OpenAI...');
         const response = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [
@@ -197,27 +181,19 @@ currentClient.on('message', async (msg) => {
 
         const reply = response.choices[0].message.content.trim();
 
-        // Handle IGNORE keyword for personal/unrelated messages
         if (reply.toUpperCase() === 'IGNORE') {
-            console.log(`[Filtering Message] Personal chat detected from ${msg.from}. No reply sent.`);
+            console.log(`[Filtering] Personal chat from ${msg.from}. Ignored.`);
             return;
         }
 
         await msg.reply(reply);
-        console.log(`[AI Reply] To: ${msg.from}, Content: ${reply}`);
-
-        // Log to dashboard activity
         io.emit('activity', { from: msg.from, body: msg.body, reply: reply });
 
     } catch (error) {
         console.error('AI Error:', error.message);
-        if (error.message.includes('api_key')) {
-            console.error('CRITICAL: Your OpenAI API key is invalid or has expired.');
-        }
     }
 });
 
-// Basic Dashboard Route with Arabic Login
 app.get('/', (req, res) => {
     if (req.session.authorized) {
         res.sendFile(__dirname + '/dashboard.html');
@@ -244,7 +220,7 @@ app.get('/', (req, res) => {
                         <input type="password" name="code" placeholder="أدخل رمز الدخول" required>
                         <button type="submit">دخول</button>
                     </form>
-                    ${req.query.error ? '<p style="color:red">الرمز غير صحيح!</p>' : ''}
+                    \${req.query.error ? '<p style="color:red">الرمز غير صحيح!</p>' : ''}
                 </div>
             </body>
             </html>
