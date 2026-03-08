@@ -148,7 +148,7 @@ io.on('connection', (socket) => {
                 console.log('[Pairing Code] Trying robust manual injection...');
                 try {
                     pairingCode = await currentClient.pupPage.evaluate(async (phone) => {
-                        const waitForStore = (timeout = 15000) => {
+                        const waitForStore = (timeout = 30000) => {
                             return new Promise((resolve, reject) => {
                                 const start = Date.now();
                                 const interval = setInterval(() => {
@@ -157,14 +157,15 @@ io.on('connection', (socket) => {
                                         resolve();
                                     } else if (Date.now() - start > timeout) {
                                         clearInterval(interval);
-                                        reject(new Error('WhatsApp Store timed out'));
+                                        reject(new Error('WhatsApp Store timed out (Slow Environment)'));
                                     }
-                                }, 500);
+                                }, 1000);
                             });
                         };
 
                         try {
                             await waitForStore();
+                            // If already link is in progress, it might return the existing code
                             return await window.Store.PairingCode.linkWithPhoneNumber(phone, true);
                         } catch (e) {
                             return 'ERROR:' + e.message;
@@ -185,7 +186,11 @@ io.on('connection', (socket) => {
                 socket.emit('pairing_code', pairingCode);
             } else {
                 console.error('[Pairing Code] Total failure.');
-                socket.emit('pairing_error', 'خطأ: ' + (lastError || 'يرجى المحاولة مرة أخرى'));
+                let userFriendlyError = 'فشل الحصول على الرمز. يرجى الانتظار 10 ثوانٍ ثم المحاولة مرة أخرى.';
+                if (lastError && lastError.includes('timed out')) {
+                    userFriendlyError = 'النظام بطيء قليلاً، يرجى المحاولة مرة أخرى الآن.';
+                }
+                socket.emit('pairing_error', 'خطأ: ' + (lastError || userFriendlyError));
             }
         } catch (error) {
             console.error('[Pairing Code Error]', error);
