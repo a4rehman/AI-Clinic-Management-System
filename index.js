@@ -59,7 +59,8 @@ function createClient() {
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ],
             executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome-stable'
         },
@@ -125,12 +126,8 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // Ensure the page is actually ready
-            try {
-                await currentClient.pupPage.waitForSelector('canvas', { timeout: 5000 });
-            } catch (e) {
-                console.log('Waiting for canvas...');
-            }
+            // Small delay to ensure browser is fully settled after QR generation
+            await new Promise(resolve => setTimeout(resolve, 5000));
 
             let code = null;
             let lastError = null;
@@ -143,6 +140,7 @@ io.on('connection', (socket) => {
                 } catch (err) {
                     lastError = err;
                     console.error(`[Pairing Code] Attempt ${attempt} failed:`, err);
+                    // If error is 't', it might need a page reload or longer wait
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 }
             }
@@ -188,7 +186,17 @@ currentClient.on('message', async (msg) => {
             return;
         }
 
+        // --- Human-like Delay ---
+        // 1. Start typing indicator
+        const chat = await msg.getChat();
+        await chat.sendStateTyping();
+
+        // 2. Wait for 2 seconds
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // 3. Send the reply
         await msg.reply(reply);
+
         io.emit('activity', { from: msg.from, body: msg.body, reply: reply });
 
     } catch (error) {
